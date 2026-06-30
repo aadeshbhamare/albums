@@ -1,106 +1,96 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { ImageItem } from '../types';
-import { Loader2 } from 'lucide-react';
+import { Loader as Loader2, Pause, Play } from 'lucide-react';
+import { getImageAsDataURL, getObjectUrl } from '../lib/imageStore';
 
 interface AnalysisViewProps {
   images: ImageItem[];
   folderName: string;
   groupingMode: 'event' | 'shotType';
   onAnalysisComplete: (analyzedImages: ImageItem[]) => void;
+  // Images already analyzed (resuming): map of id -> {section, description}
+  alreadyAnalyzed?: Map<string, { section?: string; description?: string }>;
 }
 
-const resizeImage = (file: File, maxDim = 800): Promise<string> => {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        
-        if (width > height) {
-          if (width > maxDim) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          }
-        } else {
-          if (height > maxDim) {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL('image/jpeg', 0.8));
-        } else {
-          resolve(e.target?.result as string || "");
-        }
-      };
-      img.onerror = () => {
-        resolve(e.target?.result as string || "");
-      };
-      img.src = e.target?.result as string;
-    };
-    reader.onerror = () => {
-      resolve("");
-    };
-    reader.readAsDataURL(file);
-  });
-};
+const CONCURRENCY = 5;
 
-export function AnalysisView({ images, folderName, groupingMode, onAnalysisComplete }: AnalysisViewProps) {
+export function AnalysisView({ images, folderName, groupingMode, onAnalysisComplete, alreadyAnalyzed }: AnalysisViewProps) {
   const [progress, setProgress] = useState(0);
-  const [analyzedImages, setAnalyzedImages] = useState<ImageItem[]>([]);
+  const [analyzedCount, setAnalyzedCount] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const pausedRef = useRef(false);
+  const completedRef = useRef<ImageItem[]>([]);
+  const countRef = useRef(0);
 
   useEffect(() => {
-    let isMounted = true;
+    pausedRef.current = isPaused;
+  }, [isPaused]);
+
+  useEffect(() => {
+    let cancelled = false;
 
     const analyzeImages = async () => {
       const results: ImageItem[] = [];
-      let completed = 0;
+      completedRef.current = results;
 
-      // Process in small batches or sequentially to avoid rate limits
+      // Start from already-analyzed images if resuming.
+      const queue: ImageItem[] = [];
       for (const img of images) {
-        if (!isMounted) break;
-        
+        const existing = alreadyAnalyzed?.get(img.id);
+        if (existing && existing.section) {
+          results.push({ ...img, section: existing.section, description: existing.description });
+          countRef.current++;
+          setAnalyzedCount(countRef.current);
+          setProgress(Math.round((countRef.current / images.length) * 100));
+        } else {
+          queue.push(img);
+        }
+      }
+
+      // Process the queue in concurrent batches.
+      let index = 0;
+
+      const processOne = async (img: ImageItem): Promise<void> => {
+        if (cancelled) return;
+        // Wait while paused.
+        while (pausedRef.current && !cancelled) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (cancelled) return;
+
         try {
-          // Convert File to a resized Base64 representation to prevent payload size errors ("Failed to fetch")
-          const base64 = await resizeImage(img.file);
+          const imgData = await getImageAsDataURL(img.id);
+          if (!imgData) {
+            results.push({ ...img, section: 'Uncategorized', description: 'Could not load image' });
+            return;
+          }
 
           let response = await fetch('/api/analyze-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              imageBase64: base64,
-              mimeType: 'image/jpeg',
+              imageBase64: imgData.dataUrl.split(',')[1] || imgData.dataUrl,
+              mimeType: imgData.mimeType,
               filename: img.filename,
               folderName,
               groupingMode,
-            })
+            }),
           });
 
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            if (response.status === 429 || (errData.error && errData.error.includes('429'))) {
-              console.log("Rate limited. Waiting 10 seconds before retrying...");
-              await new Promise(r => setTimeout(r, 10000));
-              response = await fetch('/api/analyze-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  imageBase64: base64,
-                  mimeType: img.file.type,
-                  filename: img.filename,
-                  folderName,
-                  groupingMode,
-                })
-              });
-            }
+          if (response.status === 429) {
+            // Rate limited — wait and retry once.
+            await new Promise((r) => setTimeout(r, 5000));
+            response = await fetch('/api/analyze-image', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageBase64: imgData.dataUrl.split(',')[1] || imgData.dataUrl,
+                mimeType: imgData.mimeType,
+                filename: img.filename,
+                folderName,
+                groupingMode,
+              }),
+            });
           }
 
           if (response.ok) {
@@ -111,19 +101,40 @@ export function AnalysisView({ images, folderName, groupingMode, onAnalysisCompl
               description: data.description || '',
             });
           } else {
-            results.push({ ...img, section: 'Uncategorized', description: 'Failed to analyze' });
+            results.push({ ...img, section: 'Uncategorized', description: 'Analysis failed' });
           }
         } catch (err) {
-          console.error("Failed to analyze image", err);
+          console.error('Failed to analyze image', img.id, err);
           results.push({ ...img, section: 'Uncategorized', description: 'Error analyzing' });
         }
+      };
 
-        completed++;
-        setProgress(Math.round((completed / images.length) * 100));
-        setAnalyzedImages([...results]); // Update intermediate state
-      }
+      // Concurrent batch runner.
+      const runBatch = async () => {
+        while (index < queue.length && !cancelled) {
+          while (pausedRef.current && !cancelled) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          if (cancelled) break;
 
-      if (isMounted) {
+          const batch: Promise<void>[] = [];
+          for (let c = 0; c < CONCURRENCY && index < queue.length; c++) {
+            batch.push(
+              processOne(queue[index]).then(() => {
+                countRef.current++;
+                setAnalyzedCount(countRef.current);
+                setProgress(Math.round((countRef.current / images.length) * 100));
+              })
+            );
+            index++;
+          }
+          await Promise.all(batch);
+        }
+      };
+
+      await runBatch();
+
+      if (!cancelled) {
         onAnalysisComplete(results);
       }
     };
@@ -131,41 +142,68 @@ export function AnalysisView({ images, folderName, groupingMode, onAnalysisCompl
     analyzeImages();
 
     return () => {
-      isMounted = false;
+      cancelled = true;
     };
-  }, [images, folderName, onAnalysisComplete]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images, folderName, groupingMode, onAnalysisComplete]);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] px-4">
       <div className="text-center mb-12 mt-12">
         <Loader2 className="w-16 h-16 text-[#D4AF37] animate-spin mx-auto mb-6" />
-        <h2 className="text-3xl font-serif italic text-white mb-4">
-          Analyzing Your Album
-        </h2>
+        <h2 className="text-3xl font-serif italic text-white mb-4">Analyzing Your Album</h2>
         <p className="text-lg text-white/60 max-w-md mx-auto font-light">
-          Our AI is scanning your {images.length} photos to categorize them by event, people, and moments.
+          Our AI is scanning your {images.length.toLocaleString()} photos in parallel batches of {CONCURRENCY}.
         </p>
       </div>
 
       <div className="w-full max-w-2xl bg-white/10 rounded-full h-4 mb-4 overflow-hidden">
-        <div 
+        <div
           className="bg-[#D4AF37] h-4 rounded-full transition-all duration-300 ease-out shadow-[0_0_15px_rgba(212,175,55,0.5)]"
           style={{ width: `${progress}%` }}
         ></div>
       </div>
-      <p className="text-[11px] uppercase tracking-widest font-bold text-white/60 mb-12">{progress}% Complete</p>
+      <div className="flex items-center gap-4 mb-12">
+        <p className="text-[11px] uppercase tracking-widest font-bold text-white/60">
+          {analyzedCount.toLocaleString()} / {images.length.toLocaleString()} ({progress}%)
+        </p>
+        <button
+          onClick={() => setIsPaused((p) => !p)}
+          className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-white/50 hover:text-white border border-white/10 rounded-full px-3 py-1 transition-colors"
+        >
+          {isPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+          {isPaused ? 'Resume' : 'Pause'}
+        </button>
+      </div>
 
-      {/* Show a mini grid of currently analyzing images */}
       <div className="grid grid-cols-5 sm:grid-cols-8 gap-2 w-full max-w-4xl opacity-50 pointer-events-none">
         {images.slice(0, 16).map((img, i) => {
-          const isDone = i < analyzedImages.length;
+          const isDone = i < analyzedCount;
           return (
-            <div key={img.id} className={`aspect-square rounded-2xl overflow-hidden ${isDone ? 'ring-2 ring-[#D4AF37] scale-105 transition-transform' : 'opacity-30'}`}>
-              <img src={img.previewUrl} alt="thumbnail" className="w-full h-full object-cover" />
+            <div
+              key={img.id}
+              className={`aspect-square rounded-2xl overflow-hidden ${isDone ? 'ring-2 ring-[#D4AF37] scale-105 transition-transform' : 'opacity-30'}`}
+            >
+              <ThumbFromStore id={img.id} />
             </div>
           );
         })}
       </div>
     </div>
   );
+}
+
+function ThumbFromStore({ id }: { id: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    getObjectUrl(id).then((u) => {
+      if (active) setUrl(u);
+    });
+    return () => {
+      active = false;
+    };
+  }, [id]);
+  if (!url) return <div className="w-full h-full bg-zinc-800 animate-pulse" />;
+  return <img src={url} alt="thumbnail" className="w-full h-full object-cover" />;
 }

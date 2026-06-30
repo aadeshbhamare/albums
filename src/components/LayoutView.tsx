@@ -1,12 +1,99 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { AlbumSection, ImageItem } from '../types';
-import { FileDown, Video, Music, Loader2, Type, LayoutTemplate, Palette, Share2, Check } from 'lucide-react';
+import { FileDown, Video, Music, Loader as Loader2, Type, Palette, Share2, Check, Trash2 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { cn } from '../lib/utils';
-import { db, auth } from '../lib/firebase';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { auth } from '../lib/firebase';
 import { v4 as uuidv4 } from 'uuid';
+import { getObjectUrl, deleteImage } from '../lib/imageStore';
+import { supabase } from '../lib/supabase';
+
+// Loads an object URL from IndexedDB for a given image id.
+function LayoutThumb({ id, className, style }: { id: string; className?: string; style?: React.CSSProperties }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    getObjectUrl(id).then((u) => {
+      if (active) setUrl(u);
+    });
+    return () => {
+      active = false;
+    };
+  }, [id]);
+  if (!url) return <div className={cn('w-full h-full bg-zinc-800 animate-pulse', className)} style={style} />;
+  return <img src={url} alt="" className={className} style={style} />;
+}
+
+// Blurred cover background.
+function CoverBg({ imageId }: { imageId: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    getObjectUrl(imageId).then((u) => {
+      if (active) setUrl(u);
+    });
+    return () => {
+      active = false;
+    };
+  }, [imageId]);
+  if (!url) return null;
+  return (
+    <div
+      className="absolute inset-0 bg-cover bg-center blur-md scale-110 opacity-15 mix-blend-overlay"
+      style={{ backgroundImage: `url(${url})` }}
+    />
+  );
+}
+
+// Blurred frame background.
+function FrameBg({ imageId }: { imageId: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    getObjectUrl(imageId).then((u) => {
+      if (active) setUrl(u);
+    });
+    return () => {
+      active = false;
+    };
+  }, [imageId]);
+  if (!url) return <div className="absolute inset-0 bg-zinc-800 animate-pulse" />;
+  return (
+    <div
+      className="absolute inset-0 bg-cover bg-center blur-2xl opacity-10 transition-transform duration-700 group-hover:scale-110"
+      style={{ backgroundImage: `url(${url})` }}
+    />
+  );
+}
+
+// For PDF export: renders the image as a background-image div (html2canvas friendly).
+function ExportImage({ imageId, fitMode }: { imageId: string; fitMode: 'cover' | 'contain' }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    getObjectUrl(imageId).then((u) => {
+      if (active) setUrl(u);
+    });
+    return () => {
+      active = false;
+    };
+  }, [imageId]);
+  return (
+    <div
+      className="relative z-10 w-full h-full shadow-[0_4px_15px_rgba(0,0,0,0.15)] border border-black/5"
+      style={{
+        backgroundImage: url ? `url(${url})` : undefined,
+        backgroundSize: fitMode === 'cover' ? 'cover' : 'contain',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+        borderRadius: '6px',
+        width: '100%',
+        height: '100%',
+      }}
+    />
+  );
+}
 
 interface LayoutViewProps {
   sections: AlbumSection[];
@@ -14,6 +101,7 @@ interface LayoutViewProps {
   onProceedToVideo: () => void;
   albumId?: string;
   onAlbumShared?: (id: string) => void;
+  onSectionsChange?: (sections: AlbumSection[]) => void;
   imageFitMode: 'cover' | 'contain';
   setImageFitMode: (mode: 'cover' | 'contain') => void;
 }
@@ -169,6 +257,7 @@ export function LayoutView({
   onProceedToVideo, 
   albumId, 
   onAlbumShared,
+  onSectionsChange,
   imageFitMode,
   setImageFitMode
 }: LayoutViewProps) {
@@ -244,6 +333,11 @@ export function LayoutView({
   useEffect(() => {
     setLocalSections(sections.map(s => ({ ...s, template: s.template || 'featured' })));
   }, [sections]);
+
+  // Notify parent of section changes for autosave.
+  useEffect(() => {
+    onSectionsChange?.(localSections);
+  }, [localSections, onSectionsChange]);
 
   const stripOklchAndOklab = (cssText: string): string => {
     if (!cssText) return "";
@@ -424,29 +518,19 @@ export function LayoutView({
   };
 
   const shareAlbum = async () => {
-    if (!auth.currentUser) {
-      alert("Please sign in to share albums.");
-      return;
-    }
     setIsSharing(true);
     try {
-      // Clean sections to avoid sharing native browser File objects (which cannot be stored in Firestore)
-      const cleanSections = localSections.map(section => ({
-        ...section,
-        images: section.images.map(img => {
-          const { file, ...rest } = img;
-          return rest;
-        })
-      }));
-
       const newId = albumId || uuidv4();
-      await setDoc(doc(db, 'shared_albums', newId), {
-        ownerId: auth.currentUser.uid,
-        folderName,
-        sections: cleanSections,
-        theme,
-        createdAt: new Date()
+      const { error } = await supabase.from('albums').upsert({
+        id: newId,
+        folder_name: folderName,
+        sections: localSections,
+        step: 'layout',
+        image_fit_mode: imageFitMode,
+        image_count: localSections.reduce((n, s) => n + s.images.length, 0),
+        updated_at: new Date().toISOString(),
       });
+      if (error) throw error;
       const link = `${window.location.origin}?albumId=${newId}`;
       setShareLink(link);
       if (onAlbumShared) onAlbumShared(newId);
@@ -503,6 +587,18 @@ export function LayoutView({
         images: s.images.map(img => img.id === imgId ? { ...img, description: newCaption } : img)
       };
     }));
+  };
+
+  const deleteImageFromSection = async (sectionId: string, imgId: string) => {
+    await deleteImage(imgId);
+    setLocalSections(prev => prev.map(s => {
+      if (s.id !== sectionId) return s;
+      return { ...s, images: s.images.filter(img => img.id !== imgId) };
+    }));
+  };
+
+  const deleteSection = (sectionId: string) => {
+    setLocalSections(prev => prev.filter(s => s.id !== sectionId));
   };
 
   const setTemplate = (sectionId: string, template: SectionTemplate) => {
@@ -667,10 +763,7 @@ export function LayoutView({
         <div className="album-page-cover relative aspect-[3/4] sm:aspect-video w-full flex items-center justify-center p-12 overflow-hidden border-b border-black/10">
           {localSections[0]?.images[0] && (
             <>
-              <div 
-                className="absolute inset-0 bg-cover bg-center blur-md scale-110 opacity-15 mix-blend-overlay"
-                style={{ backgroundImage: `url(${localSections[0].images[0].previewUrl})` }}
-              />
+              <CoverBg imageId={localSections[0].images[0].id} />
               <div className="absolute inset-0 bg-gradient-to-t via-transparent to-transparent from-black/5" />
             </>
           )}
@@ -731,7 +824,7 @@ export function LayoutView({
                   {section.name}
                 </h3>
                 
-                {/* Template Selector */}
+                {/* Template Selector + Delete Section */}
                 <div className="flex gap-2 p-1 rounded-full border border-current/10 bg-current/[0.03] backdrop-blur-sm" data-html2canvas-ignore>
                   {(['featured', 'grid', 'masonry'] as SectionTemplate[]).map(t => (
                     <button
@@ -746,6 +839,17 @@ export function LayoutView({
                       {t}
                     </button>
                   ))}
+                  <button
+                    onClick={() => {
+                      if (confirm(`Delete the "${section.name}" section and its ${section.images.length} photos?`)) {
+                        deleteSection(section.id);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-full text-[10px] uppercase tracking-widest font-bold text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-1"
+                    title="Delete this section"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
               
@@ -774,35 +878,34 @@ export function LayoutView({
                     }}
                   >
                     {/* Blurred Background to fill empty space elegantly */}
-                    <div 
-                      className="absolute inset-0 bg-cover bg-center blur-2xl opacity-10 transition-transform duration-700 group-hover:scale-110"
-                      style={{ backgroundImage: `url(${img.previewUrl})` }}
-                    />
+                    <FrameBg imageId={img.id} />
                     
                     {isExporting ? (
-                      <div 
-                        className="relative z-10 w-full h-full shadow-[0_4px_15px_rgba(0,0,0,0.15)] border border-black/5"
-                        style={{
-                          backgroundImage: `url(${img.previewUrl})`,
-                          backgroundSize: imageFitMode === 'cover' ? 'cover' : 'contain',
-                          backgroundPosition: 'center',
-                          backgroundRepeat: 'no-repeat',
-                          borderRadius: '6px',
-                          width: '100%',
-                          height: '100%',
-                        }}
-                      />
+                      <ExportImage imageId={img.id} fitMode={imageFitMode} />
                     ) : (
-                      <img 
-                        src={img.previewUrl} 
-                        alt={img.filename} 
+                      <LayoutThumb 
+                        id={img.id} 
                         className={cn(
                           "relative z-10 w-full h-full hover:scale-[1.02] transition-transform duration-700 ease-out opacity-95 group-hover:opacity-100 shadow-[0_4px_15px_rgba(0,0,0,0.15)] border border-black/5",
                           imageFitMode === 'cover' ? "object-cover" : "object-contain"
                         )}
                         style={{ borderRadius: '6px' }}
                       />
-                    )}
+                    )
+                    
+                    /* Delete button for individual image */
+                    }
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Delete this photo?')) deleteImageFromSection(section.id, img.id);
+                      }}
+                      className="absolute z-30 top-2 right-2 w-7 h-7 bg-black/70 hover:bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-200"
+                      data-html2canvas-ignore
+                      title="Delete this photo"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                     
                     {/* Caption Edit Overlay */}
                     <div className="absolute z-20 bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/50 to-transparent p-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300" data-html2canvas-ignore>

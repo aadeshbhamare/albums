@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlbumSection, ImageItem } from '../types';
-import { Loader2, Play, Download, Music, Video as VideoIcon, Upload } from 'lucide-react';
+import { Loader as Loader2, Play, Download, Music, Video as VideoIcon, Upload } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { getObjectUrl, getImage } from '../lib/imageStore';
 
 interface VideoViewProps {
   sections: AlbumSection[];
@@ -79,12 +80,15 @@ export function VideoView({ sections, folderName, imageFitMode }: VideoViewProps
           
           if (allImages.length > 0) {
             const firstImg = allImages[0];
-            firstImgMime = firstImg.file.type;
-            firstImgBase64 = await new Promise<string>((resolve) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.readAsDataURL(firstImg.file);
-            });
+            firstImgMime = firstImg.mimeType;
+            const stored = await getImage(firstImg.id);
+            if (stored) {
+              firstImgBase64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(stored.blob);
+              });
+            }
           }
 
           const videoReqRes = await fetch('/api/generate-video', {
@@ -286,12 +290,13 @@ export function VideoView({ sections, folderName, imageFitMode }: VideoViewProps
     const slideDuration = 3000; // ms
     const transDuration = 800;
     
-    // Load images
-    const htmlImages = await Promise.all(allImages.map(img => {
+    // Load images from IndexedDB
+    const htmlImages = await Promise.all(allImages.map(async (img) => {
+      const url = await getObjectUrl(img.id);
       return new Promise<HTMLImageElement>((resolve) => {
         const imgEl = new Image();
         imgEl.onload = () => resolve(imgEl);
-        imgEl.src = img.previewUrl;
+        imgEl.src = url || '';
       });
     }));
 
