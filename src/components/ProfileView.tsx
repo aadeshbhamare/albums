@@ -1,26 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { auth, db } from '../lib/firebase';
-import { signOut, updateProfile } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { Loader2, LogOut, ArrowLeft, User } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { Loader as Loader2, LogOut, ArrowLeft, User } from 'lucide-react';
+import { AppUser } from '../lib/authUser';
 
-export function ProfileView({ onBack }: { onBack: () => void }) {
+export function ProfileView({ user, onBack }: { user: AppUser; onBack: () => void }) {
   const [displayName, setDisplayName] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
-      if (!auth.currentUser) return;
       setLoading(true);
       try {
-        const docRef = doc(db, 'users', auth.currentUser.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setDisplayName(docSnap.data().displayName || '');
-        } else {
-          setDisplayName(auth.currentUser.displayName || '');
-        }
+        const { data } = await supabase.auth.getUser();
+        const meta = data.user?.user_metadata as { displayName?: string } | undefined;
+        setDisplayName(meta?.displayName || user.displayName || '');
       } catch (err) {
         console.error(err);
       } finally {
@@ -28,30 +22,27 @@ export function ProfileView({ onBack }: { onBack: () => void }) {
       }
     };
     fetchProfile();
-  }, []);
+  }, [user]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth.currentUser) return;
     setSaving(true);
     try {
-      await updateProfile(auth.currentUser, { displayName });
-      await setDoc(doc(db, 'users', auth.currentUser.uid), {
-        email: auth.currentUser.email,
-        displayName: displayName,
-        updatedAt: new Date()
-      }, { merge: true });
-      alert("Profile updated successfully");
+      const { error } = await supabase.auth.updateUser({
+        data: { displayName },
+      });
+      if (error) throw error;
+      alert('Profile updated successfully');
     } catch (err) {
       console.error(err);
-      alert("Failed to update profile");
+      alert('Failed to update profile');
     } finally {
       setSaving(false);
     }
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await supabase.auth.signOut();
   };
 
   if (loading) {
@@ -77,14 +68,14 @@ export function ProfileView({ onBack }: { onBack: () => void }) {
       <div className="bg-zinc-900/50 backdrop-blur-md p-8 rounded-[2rem] border border-white/10 shadow-xl">
         <div className="flex items-center gap-6 mb-8 pb-8 border-b border-white/10">
           <div className="w-20 h-20 bg-black rounded-full flex items-center justify-center border border-white/20">
-            {auth.currentUser?.photoURL ? (
-              <img src={auth.currentUser.photoURL} alt="Profile" className="w-full h-full rounded-full object-cover" />
+            {user.photoURL ? (
+              <img src={user.photoURL} alt="Profile" className="w-full h-full rounded-full object-cover" />
             ) : (
               <User className="w-8 h-8 text-white/40" />
             )}
           </div>
           <div>
-            <h2 className="text-xl text-white font-medium mb-1">{auth.currentUser?.email}</h2>
+            <h2 className="text-xl text-white font-medium mb-1">{user.email}</h2>
             <p className="text-[10px] uppercase tracking-widest text-[#D4AF37]">Active Member</p>
           </div>
         </div>
@@ -100,7 +91,7 @@ export function ProfileView({ onBack }: { onBack: () => void }) {
               placeholder="How should we call you?"
             />
           </div>
-          
+
           <div className="flex gap-4 pt-4">
             <button
               type="submit"

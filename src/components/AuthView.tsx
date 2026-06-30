@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { auth, googleProvider } from '../lib/firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
-import { Camera, Loader as Loader2, Mail } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { Camera, Loader2, Mail } from 'lucide-react';
 
 export function AuthView({ onLogin }: { onLogin: () => void }) {
   const [isLogin, setIsLogin] = useState(true);
@@ -16,35 +15,17 @@ export function AuthView({ onLogin }: { onLogin: () => void }) {
     setLoading(true);
     try {
       if (isLogin) {
-        await signInWithEmailAndPassword(auth, email, password);
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
       } else {
-        await createUserWithEmailAndPassword(auth, email, password);
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
       }
       onLogin();
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Authentication failed');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleGoogle = async () => {
-    setError('');
-    try {
-      await signInWithPopup(auth, googleProvider);
-      onLogin();
-    } catch (err: any) {
-      // Popup blocked — fall back to redirect flow.
-      if (err.code === 'auth/popup-blocked' || err.code === 'auth/popup-cancelled-by-user') {
-        try {
-          await signInWithRedirect(auth, googleProvider);
-          // Page will reload; result handled by getRedirectResult on next load.
-        } catch (redirectErr: any) {
-          setError(redirectErr.message);
-        }
-      } else {
-        setError(err.message);
-      }
     }
   };
 
@@ -88,6 +69,7 @@ export function AuthView({ onLogin }: { onLogin: () => void }) {
               onChange={e => setPassword(e.target.value)}
               className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-[#D4AF37] transition-colors"
               required
+              minLength={6}
             />
           </div>
           <button
@@ -99,27 +81,10 @@ export function AuthView({ onLogin }: { onLogin: () => void }) {
           </button>
         </form>
 
-        <div className="relative mb-6">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-white/10"></div>
-          </div>
-          <div className="relative flex justify-center text-[10px] uppercase tracking-widest">
-            <span className="bg-zinc-900 px-4 text-white/40">Or continue with</span>
-          </div>
-        </div>
-
-        <button
-          onClick={handleGoogle}
-          className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-white py-3.5 rounded-xl text-xs font-bold uppercase tracking-widest transition-colors flex items-center justify-center gap-2 mb-6"
-        >
-          <Mail className="w-4 h-4" />
-          Google
-        </button>
-
         <p className="text-center text-xs text-white/40">
           {isLogin ? "Don't have an account? " : "Already have an account? "}
           <button
-            onClick={() => setIsLogin(!isLogin)}
+            onClick={() => { setIsLogin(!isLogin); setError(''); }}
             className="text-[#D4AF37] hover:underline focus:outline-none"
           >
             {isLogin ? 'Sign Up' : 'Sign In'}

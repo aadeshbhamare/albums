@@ -4,7 +4,6 @@ import { FileDown, Video, Music, Loader as Loader2, Type, Palette, Share2, Check
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { cn } from '../lib/utils';
-import { auth } from '../lib/firebase';
 import { v4 as uuidv4 } from 'uuid';
 import { getObjectUrl, deleteImage } from '../lib/imageStore';
 import { supabase } from '../lib/supabase';

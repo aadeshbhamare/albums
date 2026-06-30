@@ -9,8 +9,8 @@ import { AuthView } from './components/AuthView';
 import { ProfileView } from './components/ProfileView';
 import { DashboardView } from './components/DashboardView';
 import { Camera, User, Loader as Loader2, Trash2, LayoutGrid } from 'lucide-react';
-import { auth } from './lib/firebase';
-import { onAuthStateChanged, getRedirectResult, User as FirebaseUser } from 'firebase/auth';
+import { supabase } from './lib/supabase';
+import { AppUser } from './lib/authUser';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   getCurrentAlbumId,
@@ -34,7 +34,7 @@ export default function App() {
   const [sections, setSections] = useState<AlbumSection[]>([]);
   const [groupingMode, setGroupingMode] = useState<'event' | 'shotType'>('event');
 
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
@@ -81,20 +81,29 @@ export default function App() {
       }
     };
 
-    // Handle Google redirect sign-in result (popup-blocked fallback).
-    getRedirectResult(auth).catch(() => {});
-
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-      if (!u) {
-        setShowProfile(false);
-        setShowDashboard(false);
-      }
+    // Supabase auth state listener.
+    const { data: authSub } = supabase.auth.onAuthStateChange((event, session) => {
+      (async () => {
+        const u = session?.user;
+        if (u) {
+          const meta = u.user_metadata as { displayName?: string } | undefined;
+          setUser({
+            id: u.id,
+            email: u.email ?? null,
+            displayName: meta?.displayName ?? null,
+            photoURL: null,
+          });
+        } else {
+          setUser(null);
+          setShowProfile(false);
+          setShowDashboard(false);
+        }
+        setLoading(false);
+      })();
     });
 
     restore();
-    return () => unsubscribe();
+    return () => authSub.subscription.unsubscribe();
   }, []);
 
   // Autosave: whenever key state changes, persist to Supabase (debounced).
@@ -273,7 +282,7 @@ export default function App() {
         transition={{ duration: 0.3 }}
         className="min-h-screen bg-[#0F0F0F] text-[#E0D7D0] font-sans overflow-y-auto"
       >
-        <ProfileView onBack={() => setShowProfile(false)} />
+        <ProfileView user={user} onBack={() => setShowProfile(false)} />
       </motion.div>
     );
   }
