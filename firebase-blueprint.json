@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "user": {
+      "title": "User Profile",
+      "description": "Information about registered users",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "User's email address"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User's display name"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Account creation timestamp"
+        }
+      },
+      "required": ["email", "displayName", "createdAt"]
+    },
+    "sharedAlbum": {
+      "title": "Shared Album",
+      "description": "A customized photo album shared by a user",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who owns the album"
+        },
+        "folderName": {
+          "type": "string",
+          "description": "The name of the album folder"
+        },
+        "sections": {
+          "type": "array",
+          "description": "Chronological or subject-wise sections containing image definitions"
+        },
+        "theme": {
+          "type": "string",
+          "description": "Design theme of the album"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the album was shared"
+        }
+      },
+      "required": ["ownerId", "folderName", "sections", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "User profile collection, keyed by auth user ID"
+    },
+    "/shared_albums/{albumId}": {
+      "schema": "sharedAlbum",
+      "description": "Shared photo albums collection"
+    }
+  }
+}

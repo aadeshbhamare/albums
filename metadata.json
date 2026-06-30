@@ -1,0 +1,6 @@
+{
+  "name": "Lumina Albums",
+  "description": "AI-powered intelligent photo album creator. Upload a folder of images, let Gemini categorize them automatically, generate a beautiful PDF layout, compose background music with Lyria, create an intro video with Veo, and export an animated video composition.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

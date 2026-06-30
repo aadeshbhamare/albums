@@ -1,0 +1,54 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default-deny catch-all rule as required by Phase 4 Rule 1
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // User profile matching
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId);
+    }
+
+    // Shared albums matching
+    match /shared_albums/{albumId} {
+      // Allow public read access so shared links can be viewed by anyone (including guests)
+      allow get: if true;
+      allow list: if true;
+      
+      // Allow creation by signed in users, enforcing they set themselves as the owner
+      allow create: if isSignedIn() 
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.folderName is string
+        && request.resource.data.folderName.size() <= 200;
+        
+      // Allow update only by the original album owner, ensuring ownerId doesn't change
+      allow update: if isSignedIn() 
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.folderName is string
+        && request.resource.data.folderName.size() <= 200;
+        
+      // Allow deletion only by the owner
+      allow delete: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid;
+    }
+  }
+}
