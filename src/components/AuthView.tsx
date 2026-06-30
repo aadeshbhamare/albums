@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { auth, googleProvider } from '../lib/firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
-import { Camera, Loader2, Mail } from 'lucide-react';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
+import { Camera, Loader as Loader2, Mail } from 'lucide-react';
 
 export function AuthView({ onLogin }: { onLogin: () => void }) {
   const [isLogin, setIsLogin] = useState(true);
@@ -29,11 +29,22 @@ export function AuthView({ onLogin }: { onLogin: () => void }) {
   };
 
   const handleGoogle = async () => {
+    setError('');
     try {
       await signInWithPopup(auth, googleProvider);
       onLogin();
     } catch (err: any) {
-      setError(err.message);
+      // Popup blocked — fall back to redirect flow.
+      if (err.code === 'auth/popup-blocked' || err.code === 'auth/popup-cancelled-by-user') {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          // Page will reload; result handled by getRedirectResult on next load.
+        } catch (redirectErr: any) {
+          setError(redirectErr.message);
+        }
+      } else {
+        setError(err.message);
+      }
     }
   };
 

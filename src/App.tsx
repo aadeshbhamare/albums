@@ -10,7 +10,7 @@ import { ProfileView } from './components/ProfileView';
 import { DashboardView } from './components/DashboardView';
 import { Camera, User, Loader as Loader2, Trash2, LayoutGrid } from 'lucide-react';
 import { auth } from './lib/firebase';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { onAuthStateChanged, getRedirectResult, User as FirebaseUser } from 'firebase/auth';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   getCurrentAlbumId,
@@ -80,6 +80,9 @@ export default function App() {
         }
       }
     };
+
+    // Handle Google redirect sign-in result (popup-blocked fallback).
+    getRedirectResult(auth).catch(() => {});
 
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
