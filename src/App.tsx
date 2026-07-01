@@ -49,61 +49,60 @@ export default function App() {
     stepRef.current = step;
   }, [step]);
 
-  // Restore album on load (from URL param or localStorage current album id).
+  // Auth listener — runs once. Only updates user state, never resets album state.
+  useEffect(() => {
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      const u = session?.user ?? null;
+      if (u) {
+        const meta = u.user_metadata as { displayName?: string } | undefined;
+        setUser({
+          id: u.id,
+          email: u.email ?? null,
+          displayName: meta?.displayName ?? null,
+          photoURL: null,
+        });
+      } else {
+        setUser(null);
+        setShowProfile(false);
+        setShowDashboard(false);
+      }
+      setLoading(false);
+    });
+    return () => authSub.subscription.unsubscribe();
+  }, []);
+
+  // Album restore — runs once on mount, independent of auth events.
   useEffect(() => {
     const restore = async () => {
       const params = new URLSearchParams(window.location.search);
       const sharedId = params.get('albumId') || getCurrentAlbumId();
+      if (!sharedId) return;
 
-      if (sharedId) {
-        setRestoring(true);
-        try {
-          const album = await loadAlbum(sharedId);
-          if (album) {
-            setAlbumId(album.id);
-            albumIdRef.current = album.id;
-            setCurrentAlbumId(album.id);
-            setFolderName(album.folder_name);
-            setGroupingMode(album.grouping_mode as 'event' | 'shotType');
-            setImageFitMode(album.image_fit_mode as 'cover' | 'contain');
-            const restoredSections = (album.sections || []) as PersistedSection[];
-            setSections(restoredSections);
-            // Flatten sections to get all images for review step.
-            const allImages: ImageItem[] = restoredSections.flatMap((s) => s.images);
-            setImages(allImages);
-            setStep(album.step as Step);
-          }
-        } catch (err) {
-          console.error('Error restoring album', err);
-        } finally {
-          setRestoring(false);
+      setRestoring(true);
+      try {
+        const album = await loadAlbum(sharedId);
+        if (album) {
+          setAlbumId(album.id);
+          albumIdRef.current = album.id;
+          setCurrentAlbumId(album.id);
+          setFolderName(album.folder_name);
+          setGroupingMode(album.grouping_mode as 'event' | 'shotType');
+          setImageFitMode(album.image_fit_mode as 'cover' | 'contain');
+          const restoredSections = (album.sections || []) as PersistedSection[];
+          setSections(restoredSections);
+          const allImages: ImageItem[] = restoredSections.flatMap((s) => s.images);
+          setImages(allImages);
+          // Never restore into 'analyzing' — analysis can't resume across page loads.
+          const safeStep = (album.step === 'analyzing' ? 'upload' : album.step) as Step;
+          setStep(safeStep);
         }
+      } catch (err) {
+        console.error('Error restoring album', err);
+      } finally {
+        setRestoring(false);
       }
     };
-
-    // Supabase auth state listener.
-    const { data: authSub } = supabase.auth.onAuthStateChange((event, session) => {
-      (async () => {
-        const u = session?.user;
-        if (u) {
-          const meta = u.user_metadata as { displayName?: string } | undefined;
-          setUser({
-            id: u.id,
-            email: u.email ?? null,
-            displayName: meta?.displayName ?? null,
-            photoURL: null,
-          });
-        } else {
-          setUser(null);
-          setShowProfile(false);
-          setShowDashboard(false);
-        }
-        setLoading(false);
-      })();
-    });
-
     restore();
-    return () => authSub.subscription.unsubscribe();
   }, []);
 
   // Autosave: whenever key state changes, persist to Supabase (debounced).
@@ -162,7 +161,9 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (albumIdRef.current && !restoring) {
+    // Don't persist during analysis — images have no section data yet.
+    // Don't persist while restoring to avoid overwriting with stale state.
+    if (albumIdRef.current && !restoring && step !== 'analyzing') {
       persistState(step, images, sections);
     }
   }, [step, images, sections, persistState, restoring]);
@@ -181,10 +182,10 @@ export default function App() {
     setStep('analyzing');
   };
 
-  const handleAnalysisComplete = (analyzedImages: ImageItem[]) => {
+  const handleAnalysisComplete = useCallback((analyzedImages: ImageItem[]) => {
     setImages(analyzedImages);
     setStep('review');
-  };
+  }, []);
 
   const handleProceedToLayout = (finalSections: AlbumSection[]) => {
     setSections(finalSections);
@@ -255,7 +256,7 @@ export default function App() {
     setSections(restoredSections);
     const allImages: ImageItem[] = restoredSections.flatMap((s) => s.images);
     setImages(allImages);
-    setStep(album.step as Step);
+    setStep((album.step === 'analyzing' ? 'upload' : album.step) as Step);
   };
 
   if (loading || restoring) {

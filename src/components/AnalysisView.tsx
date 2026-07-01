@@ -145,7 +145,7 @@ export function AnalysisView({ images, folderName, groupingMode, onAnalysisCompl
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [images, folderName, groupingMode, onAnalysisComplete]);
+  }, []);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] px-4">
